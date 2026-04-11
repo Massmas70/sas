@@ -13,9 +13,6 @@ from telegram.ext import *
 from datetime import datetime
 
 TOKEN = os.getenv("TOKEN")
-def admin(update, context):
-    if update.effective_user.id != ADMIN_ID:
-        return update.message.reply_text("❌ ليس لديك صلاحية")
 
     update.message.reply_text(
         "👑 لوحة الأدمن:\n"
