@@ -88,8 +88,6 @@ def button(update, context):
         acc = cursor.fetchone()
 
         keyboard = [
-            [InlineKeyboardButton("➕ تعبئة", callback_data="deposit_acc")],
-            [InlineKeyboardButton("➖ سحب", callback_data="withdraw_acc")],
             [InlineKeyboardButton("🔑 تغيير كلمة السر", callback_data="change_pass")],
             [InlineKeyboardButton("❌ حذف الحساب", callback_data="delete")],
             [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
@@ -112,16 +110,6 @@ def button(update, context):
     elif data == "change_pass":
         context.user_data["step"] = "change_pass"
         query.message.reply_text("✏️ اكتب كلمة السر الجديدة:")
-
-    # تعبئة من المحفظة
-    elif data == "deposit_acc":
-        context.user_data["step"] = "deposit_amount"
-        query.message.reply_text("💰 اكتب المبلغ:")
-
-    # سحب إلى المحفظة
-    elif data == "withdraw_acc":
-        context.user_data["step"] = "withdraw_amount"
-        query.message.reply_text("💰 اكتب المبلغ:")
 
 # ---------------- الرسائل ----------------
 def handle_message(update, context):
@@ -148,54 +136,6 @@ def handle_message(update, context):
         conn.commit()
         context.user_data.clear()
         update.message.reply_text("✅ تم إنشاء الحساب", reply_markup=main_menu())
-
-    # تنفيذ تعبئة
-    elif context.user_data.get("step") == "deposit_amount":
-        try:
-            amount = int(text)
-        except:
-            update.message.reply_text("❌ رقم غير صحيح")
-            return
-
-        acc_id = context.user_data["acc_id"]
-
-        cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
-        wallet = cursor.fetchone()[0]
-
-        if wallet < amount:
-            update.message.reply_text("❌ الرصيد غير كافي")
-            return
-
-        cursor.execute("UPDATE users SET wallet = wallet - %s WHERE user_id=%s", (amount, user_id))
-        cursor.execute("UPDATE accounts SET balance = balance + %s WHERE id=%s", (amount, acc_id))
-        conn.commit()
-
-        context.user_data.clear()
-        update.message.reply_text("✅ تم التعبئة", reply_markup=main_menu())
-
-    # تنفيذ سحب
-    elif context.user_data.get("step") == "withdraw_amount":
-        try:
-            amount = int(text)
-        except:
-            update.message.reply_text("❌ رقم غير صحيح")
-            return
-
-        acc_id = context.user_data["acc_id"]
-
-        cursor.execute("SELECT balance FROM accounts WHERE id=%s", (acc_id,))
-        balance = cursor.fetchone()[0]
-
-        if balance < amount:
-            update.message.reply_text("❌ الرصيد غير كافي")
-            return
-
-        cursor.execute("UPDATE accounts SET balance = balance - %s WHERE id=%s", (amount, acc_id))
-        cursor.execute("UPDATE users SET wallet = wallet + %s WHERE user_id=%s", (amount, user_id))
-        conn.commit()
-
-        context.user_data.clear()
-        update.message.reply_text("✅ تم السحب", reply_markup=main_menu())
 
     # المحفظة
     elif text == "💰 محفظتي":
