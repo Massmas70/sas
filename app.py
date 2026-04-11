@@ -100,7 +100,7 @@ def button(update, context):
     # -------- تنفيذ على الحساب --------
     elif data in ["deposit_acc", "withdraw_acc"]:
         i = user["selected_account"]
-      amount = user["amount"]
+        amount = user["amount"]
 
     # ✅ تحديد العملية
     user["action"] = data
