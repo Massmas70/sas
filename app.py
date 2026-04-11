@@ -5,7 +5,6 @@ import psycopg2
 from telegram import *
 from telegram.ext import *
 
-# ---------------- الإعدادات ----------------
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -32,6 +31,17 @@ def create_tables():
         username TEXT,
         password TEXT,
         balance INTEGER DEFAULT 0
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS transactions (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT,
+        type TEXT,
+        amount INTEGER,
+        method TEXT,
+        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
@@ -81,6 +91,7 @@ def button(update, context):
 
     query.answer()
 
+    # -------- الحساب --------
     if data.startswith("acc_"):
         acc_id = int(data.split("_")[1])
 
@@ -109,12 +120,14 @@ def button(update, context):
         context.user_data["step"] = "change_pass"
         query.message.reply_text("✏️ اكتب كلمة السر الجديدة:")
 
+    # -------- اختيار حساب --------
     elif data.startswith("select_"):
         acc_id = int(data.split("_")[1])
         context.user_data["acc_id"] = acc_id
-        context.user_data["step"] = "amount"
+        context.user_data["step"] = "amount_account"
         query.message.reply_text("💰 اكتب المبلغ:")
 
+    # -------- تنفيذ حساب --------
     elif data in ["deposit_acc", "withdraw_acc"]:
         acc_id = context.user_data["acc_id"]
         amount = context.user_data["amount"]
@@ -136,12 +149,68 @@ def button(update, context):
             balance = cursor.fetchone()[0]
 
             if balance >= amount:
-                cursor.execute("UPDATE accounts SET balance = balance - %s WHERE id=%s", (acc_id,))
+                cursor.execute("UPDATE accounts SET balance = balance - %s WHERE id=%s", (amount, acc_id))
                 cursor.execute("UPDATE users SET wallet = wallet + %s WHERE user_id=%s", (amount, user_id))
                 conn.commit()
                 query.message.reply_text("✅ تم السحب")
             else:
                 query.message.reply_text("❌ رصيد الحساب غير كافي")
+
+    # -------- المحفظة --------
+    elif data == "deposit_wallet":
+        context.user_data["action"] = "deposit"
+        context.user_data["step"] = "amount_wallet"
+        query.message.reply_text("💰 أدخل المبلغ:")
+
+    elif data == "withdraw_wallet":
+        context.user_data["action"] = "withdraw"
+        context.user_data["step"] = "amount_wallet"
+        query.message.reply_text("💰 أدخل المبلغ:")
+
+    elif data == "history":
+        cursor.execute(
+            "SELECT type, amount, method, date FROM transactions WHERE user_id=%s ORDER BY id DESC LIMIT 10",
+            (user_id,)
+        )
+        rows = cursor.fetchall()
+
+        if not rows:
+            query.message.reply_text("❌ لا يوجد عمليات")
+            return
+
+        msg = "\n".join([f"{r[0]} | {r[1]} ل.س | {r[2]}" for r in rows])
+        query.message.reply_text(msg)
+
+    # -------- الدفع --------
+    elif data in ["syriatel", "sham"]:
+        amount = context.user_data["amount"]
+        action = context.user_data["action"]
+        method = "سيريتيل كاش" if data == "syriatel" else "شام كاش"
+
+        if action == "deposit":
+            cursor.execute("UPDATE users SET wallet = wallet + %s WHERE user_id=%s", (amount, user_id))
+            cursor.execute(
+                "INSERT INTO transactions (user_id, type, amount, method) VALUES (%s, %s, %s, %s)",
+                (user_id, "➕ تعبئة", amount, method)
+            )
+            conn.commit()
+            query.message.reply_text("✅ تم شحن المحفظة")
+
+        elif action == "withdraw":
+            cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
+            wallet = cursor.fetchone()[0]
+
+            if wallet < amount:
+                query.message.reply_text("❌ الرصيد غير كافي")
+                return
+
+            cursor.execute("UPDATE users SET wallet = wallet - %s WHERE user_id=%s", (amount, user_id))
+            cursor.execute(
+                "INSERT INTO transactions (user_id, type, amount, method) VALUES (%s, %s, %s, %s)",
+                (user_id, "➖ سحب", amount, method)
+            )
+            conn.commit()
+            query.message.reply_text("✅ تم السحب")
 
 # ---------------- الرسائل ----------------
 def handle_message(update, context):
@@ -151,7 +220,17 @@ def handle_message(update, context):
     if text == "💰 محفظتي":
         cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
         wallet = cursor.fetchone()[0]
-        update.message.reply_text(f"💰 رصيدك: {wallet} ل.س")
+
+        keyboard = [
+            [InlineKeyboardButton("➕ تعبئة", callback_data="deposit_wallet")],
+            [InlineKeyboardButton("➖ سحب", callback_data="withdraw_wallet")],
+            [InlineKeyboardButton("📊 العمليات", callback_data="history")]
+        ]
+
+        update.message.reply_text(
+            f"💰 رصيدك: {wallet} ل.س",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
     elif text == "📂 حساباتي":
         show_accounts(update, context)
@@ -190,7 +269,7 @@ def handle_message(update, context):
 
         update.message.reply_text("اختر الحساب:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif context.user_data.get("step") == "amount":
+    elif context.user_data.get("step") == "amount_account":
         try:
             context.user_data["amount"] = int(text)
         except:
@@ -205,6 +284,22 @@ def handle_message(update, context):
         ]
 
         update.message.reply_text("اختر العملية:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif context.user_data.get("step") == "amount_wallet":
+        try:
+            context.user_data["amount"] = int(text)
+        except:
+            update.message.reply_text("❌ أدخل رقم صحيح")
+            return
+
+        context.user_data["step"] = None
+
+        keyboard = [
+            [InlineKeyboardButton("📱 سيريتيل كاش", callback_data="syriatel")],
+            [InlineKeyboardButton("📱 شام كاش", callback_data="sham")]
+        ]
+
+        update.message.reply_text("اختر طريقة الدفع:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif context.user_data.get("step") == "change_pass":
         acc_id = context.user_data["acc_id"]
