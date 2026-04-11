@@ -30,17 +30,6 @@ def create_tables():
     )
     """)
 
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS transactions (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT,
-        type TEXT,
-        amount INTEGER,
-        method TEXT,
-        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
     conn.commit()
 
 # ---------------- menu ----------------
@@ -72,14 +61,16 @@ def show_accounts(update, context):
         update.message.reply_text("❌ لا يوجد حسابات", reply_markup=main_menu())
         return
 
+    # ✅ فقط أسماء الحسابات
     keyboard = [
         [InlineKeyboardButton(acc[1], callback_data=f"acc_{acc[0]}")]
         for acc in accounts
     ]
 
-    # ✅ زر معاملات الحسابات فقط (بدون تعبئة/سحب)
+    # ✅ معاملات الحسابات
     keyboard.append([InlineKeyboardButton("📊 معاملات الحسابات", callback_data="accounts_history")])
 
+    # ✅ رجوع
     keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
 
     update.message.reply_text("📂 حساباتك:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -115,7 +106,7 @@ def button(update, context):
         query.edit_message_text(
             f"👤 اسم المستخدم: {acc[0]}\n"
             f"🔑 كلمة السر: {acc[1]}\n"
-            f"💰 الرصيد: {acc[2]} ل.س",
+            f"💰 الرصيد: {acc[2]}",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
@@ -143,11 +134,11 @@ def button(update, context):
 
         msg = "📊 معاملات الحسابات:\n\n"
         for r in rows:
-            msg += f"👤 {r[0]} | 💰 {r[1]} ل.س\n"
+            msg += f"👤 {r[0]} | 💰 {r[1]}\n"
 
         query.message.reply_text(msg)
 
-    # -------- المحفظة (لم يتم تغييرها) --------
+    # -------- المحفظة --------
     elif data == "deposit_wallet":
         context.user_data["action"] = "deposit"
         context.user_data["step"] = "amount_wallet"
@@ -157,26 +148,6 @@ def button(update, context):
         context.user_data["action"] = "withdraw"
         context.user_data["step"] = "amount_wallet"
         query.message.reply_text("💰 أدخل المبلغ:")
-
-    elif data == "history":
-        cursor.execute("SELECT type, amount, method FROM transactions WHERE user_id=%s ORDER BY id DESC LIMIT 10", (user_id,))
-        rows = cursor.fetchall()
-
-        msg = "\n".join([f"{r[0]} | {r[1]} | {r[2]}" for r in rows])
-        query.message.reply_text(msg, reply_markup=main_menu())
-
-    elif data in ["syriatel", "sham"]:
-        amount = context.user_data.get("amount")
-        action = context.user_data.get("action")
-
-        if action == "deposit":
-            cursor.execute("UPDATE users SET wallet = wallet + %s WHERE user_id=%s", (amount, user_id))
-        else:
-            cursor.execute("UPDATE users SET wallet = wallet - %s WHERE user_id=%s", (amount, user_id))
-
-        conn.commit()
-        query.message.reply_text("✅ تمت العملية", reply_markup=main_menu())
-        context.user_data.clear()
 
 # ---------------- الرسائل ----------------
 def handle_message(update, context):
@@ -202,7 +173,6 @@ def handle_message(update, context):
         context.user_data.clear()
         update.message.reply_text("✅ تم إنشاء الحساب", reply_markup=main_menu())
 
-    # تعبئة حساب
     elif context.user_data.get("step") == "deposit_acc_amount":
         amount = int(text)
         acc_id = context.user_data["acc_id"]
@@ -214,7 +184,6 @@ def handle_message(update, context):
         context.user_data.clear()
         update.message.reply_text("✅ تم التعبئة", reply_markup=main_menu())
 
-    # سحب من حساب
     elif context.user_data.get("step") == "withdraw_acc_amount":
         amount = int(text)
         acc_id = context.user_data["acc_id"]
@@ -225,30 +194,6 @@ def handle_message(update, context):
 
         context.user_data.clear()
         update.message.reply_text("✅ تم السحب", reply_markup=main_menu())
-
-    # المحفظة (كما هي)
-    elif text == "💰 محفظتي":
-        cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
-        wallet = cursor.fetchone()[0]
-
-        keyboard = [
-            [InlineKeyboardButton("➕ تعبئة المحفظة", callback_data="deposit_wallet")],
-            [InlineKeyboardButton("➖ سحب من المحفظة", callback_data="withdraw_wallet")],
-            [InlineKeyboardButton("📊 العمليات", callback_data="history")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]
-        ]
-
-        update.message.reply_text(f"💰 رصيدك: {wallet}", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    elif context.user_data.get("step") == "amount_wallet":
-        context.user_data["amount"] = int(text)
-
-        keyboard = [
-            [InlineKeyboardButton("📱 سيريتيل كاش", callback_data="syriatel")],
-            [InlineKeyboardButton("📱 شام كاش", callback_data="sham")]
-        ]
-
-        update.message.reply_text("اختر الطريقة:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif context.user_data.get("step") == "change_pass":
         cursor.execute("UPDATE accounts SET password=%s WHERE id=%s",
