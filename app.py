@@ -5,31 +5,37 @@ import psycopg2
 from telegram import *
 from telegram.ext import *
 
+# ---------------- الإعدادات ----------------
 TOKEN = os.getenv("TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise Exception("❌ DATABASE_URL غير موجود")
 
 # ---------------- الاتصال بقاعدة البيانات ----------------
-conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
 # ---------------- إنشاء الجداول ----------------
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id BIGINT PRIMARY KEY,
-    wallet INTEGER DEFAULT 0
-)
-""")
+def create_tables():
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id BIGINT PRIMARY KEY,
+        wallet INTEGER DEFAULT 0
+    )
+    """)
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS accounts (
-    id SERIAL PRIMARY KEY,
-    user_id BIGINT,
-    username TEXT,
-    password TEXT,
-    balance INTEGER DEFAULT 0
-)
-""")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS accounts (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT,
+        username TEXT,
+        password TEXT,
+        balance INTEGER DEFAULT 0
+    )
+    """)
 
-conn.commit()
+    conn.commit()
 
 # ---------------- القائمة ----------------
 def main_menu():
@@ -42,10 +48,8 @@ def main_menu():
 def start(update, context):
     user_id = update.effective_user.id
 
-    cursor.execute("SELECT * FROM users WHERE user_id=%s", (user_id,))
-    user = cursor.fetchone()
-
-    if not user:
+    cursor.execute("SELECT user_id FROM users WHERE user_id=%s", (user_id,))
+    if not cursor.fetchone():
         cursor.execute("INSERT INTO users (user_id) VALUES (%s)", (user_id,))
         conn.commit()
 
@@ -83,7 +87,7 @@ def button(update, context):
         cursor.execute("SELECT username, password, balance FROM accounts WHERE id=%s", (acc_id,))
         acc = cursor.fetchone()
 
-        context.user_data["selected_account"] = acc_id
+        context.user_data["acc_id"] = acc_id
 
         keyboard = [
             [InlineKeyboardButton("❌ حذف", callback_data="delete")],
@@ -96,7 +100,7 @@ def button(update, context):
         )
 
     elif data == "delete":
-        acc_id = context.user_data["selected_account"]
+        acc_id = context.user_data["acc_id"]
         cursor.execute("DELETE FROM accounts WHERE id=%s", (acc_id,))
         conn.commit()
         query.edit_message_text("✅ تم حذف الحساب")
@@ -107,12 +111,12 @@ def button(update, context):
 
     elif data.startswith("select_"):
         acc_id = int(data.split("_")[1])
-        context.user_data["selected_account"] = acc_id
+        context.user_data["acc_id"] = acc_id
         context.user_data["step"] = "amount"
         query.message.reply_text("💰 اكتب المبلغ:")
 
     elif data in ["deposit_acc", "withdraw_acc"]:
-        acc_id = context.user_data["selected_account"]
+        acc_id = context.user_data["acc_id"]
         amount = context.user_data["amount"]
 
         if data == "deposit_acc":
@@ -132,7 +136,7 @@ def button(update, context):
             balance = cursor.fetchone()[0]
 
             if balance >= amount:
-                cursor.execute("UPDATE accounts SET balance = balance - %s WHERE id=%s", (amount, acc_id))
+                cursor.execute("UPDATE accounts SET balance = balance - %s WHERE id=%s", (acc_id,))
                 cursor.execute("UPDATE users SET wallet = wallet + %s WHERE user_id=%s", (amount, user_id))
                 conn.commit()
                 query.message.reply_text("✅ تم السحب")
@@ -147,7 +151,6 @@ def handle_message(update, context):
     if text == "💰 محفظتي":
         cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
         wallet = cursor.fetchone()[0]
-
         update.message.reply_text(f"💰 رصيدك: {wallet} ل.س")
 
     elif text == "📂 حساباتي":
@@ -176,6 +179,10 @@ def handle_message(update, context):
         cursor.execute("SELECT id, username FROM accounts WHERE user_id=%s", (user_id,))
         accounts = cursor.fetchall()
 
+        if not accounts:
+            update.message.reply_text("❌ لا يوجد حسابات")
+            return
+
         keyboard = [
             [InlineKeyboardButton(acc[1], callback_data=f"select_{acc[0]}")]
             for acc in accounts
@@ -200,7 +207,7 @@ def handle_message(update, context):
         update.message.reply_text("اختر العملية:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif context.user_data.get("step") == "change_pass":
-        acc_id = context.user_data["selected_account"]
+        acc_id = context.user_data["acc_id"]
 
         cursor.execute("UPDATE accounts SET password=%s WHERE id=%s", (text, acc_id))
         conn.commit()
@@ -208,8 +215,10 @@ def handle_message(update, context):
         context.user_data["step"] = None
         update.message.reply_text("✅ تم تغيير كلمة السر")
 
-# ---------------- تشغيل ----------------
+# ---------------- التشغيل ----------------
 def main():
+    create_tables()
+
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
