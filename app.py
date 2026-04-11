@@ -98,9 +98,9 @@ def button(update, context):
         query.message.reply_text("💰 اكتب المبلغ:")
 
     # -------- تنفيذ على الحساب --------
-elif data in ["deposit_acc", "withdraw_acc"]:
-    i = user["selected_account"]
-    amount = user["amount"]
+    elif data in ["deposit_acc", "withdraw_acc"]:
+        i = user["selected_account"]
+      amount = user["amount"]
 
     # ✅ تحديد العملية
     user["action"] = data
