@@ -72,7 +72,12 @@ def show_accounts(update, context):
         update.message.reply_text("❌ لا يوجد حسابات", reply_markup=main_menu())
         return
 
-    keyboard = [[InlineKeyboardButton(acc[1], callback_data=f"acc_{acc[0]}")] for acc in accounts]
+    keyboard = [
+        [InlineKeyboardButton(acc[1], callback_data=f"acc_{acc[0]}")]
+        for acc in accounts
+    ]
+
+    keyboard.append([InlineKeyboardButton("📊 معاملات الحسابات", callback_data="accounts_history")])
     keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="back_main")])
 
     update.message.reply_text("📂 حساباتك:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -124,15 +129,30 @@ def button(update, context):
         context.user_data["step"] = "change_pass"
         query.message.reply_text("✏️ اكتب كلمة السر الجديدة:")
 
-    # تعبئة الحساب
+    # تعبئة حساب
     elif data == "deposit_acc":
         context.user_data["step"] = "deposit_acc_amount"
         query.message.reply_text("💰 أدخل المبلغ:")
 
-    # سحب من الحساب
+    # سحب من حساب
     elif data == "withdraw_acc":
         context.user_data["step"] = "withdraw_acc_amount"
         query.message.reply_text("💰 أدخل المبلغ:")
+
+    # معاملات الحسابات
+    elif data == "accounts_history":
+        cursor.execute("SELECT username, balance FROM accounts WHERE user_id=%s", (user_id,))
+        rows = cursor.fetchall()
+
+        if not rows:
+            query.message.reply_text("❌ لا يوجد حسابات")
+            return
+
+        msg = "📊 معاملات الحسابات:\n\n"
+        for r in rows:
+            msg += f"👤 {r[0]} | 💰 {r[1]} ل.س\n"
+
+        query.message.reply_text(msg)
 
     # -------- المحفظة --------
     elif data == "deposit_wallet":
@@ -227,7 +247,7 @@ def handle_message(update, context):
         context.user_data.clear()
         update.message.reply_text("✅ تم التعبئة", reply_markup=main_menu())
 
-    # سحب من الحساب
+    # سحب من حساب
     elif context.user_data.get("step") == "withdraw_acc_amount":
         try:
             amount = int(text)
