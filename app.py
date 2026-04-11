@@ -98,7 +98,30 @@ def button(update, context):
         query.message.reply_text("💰 اكتب المبلغ:")
 
     # -------- تنفيذ على الحساب --------
-    elif data in ["deposit_acc", "withdraw_acc"]:
+elif data in ["deposit_acc", "withdraw_acc"]:
+    i = user["selected_account"]
+    amount = user["amount"]
+
+    # ✅ تحديد العملية
+    user["action"] = data
+
+    if data == "deposit_acc":
+        if user["wallet"] >= amount:
+            user["wallet"] -= amount
+            user["accounts"][i]["balance"] += amount
+            user["history"].append(f"➕ {amount} ل.س إلى الحساب")
+            query.message.reply_text("✅ تم التعبئة")
+        else:
+            query.message.reply_text("❌ الرصيد غير كافي")
+
+    elif data == "withdraw_acc":
+        if user["accounts"][i]["balance"] >= amount:
+            user["accounts"][i]["balance"] -= amount
+            user["wallet"] += amount
+            user["history"].append(f"➖ {amount} ل.س إلى المحفظة")
+            query.message.reply_text("✅ تم السحب")
+        else:
+            query.message.reply_text("❌ رصيد الحساب غير كافي")
         i = user["selected_account"]
         amount = user["amount"]
 
@@ -214,7 +237,11 @@ def handle_message(update, context):
         update.message.reply_text("اختر الحساب:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif user["step"] == "amount_account":
-        user["amount"] = int(text)
+        try:
+    user["amount"] = int(text)
+except:
+    update.message.reply_text("❌ أدخل رقم صحيح")
+    return
         user["step"] = None
 
         keyboard = [
