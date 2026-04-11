@@ -51,59 +51,26 @@ def start(update, context):
 
     update.message.reply_text("👋 أهلا بك", reply_markup=main_menu())
 
-# ---------------- عرض الحسابات ----------------
+# ---------------- عرض الحسابات (بدون أزرار) ----------------
 def show_accounts(update, context):
     user_id = update.effective_user.id
 
-    cursor.execute("SELECT id, username FROM accounts WHERE user_id=%s", (user_id,))
+    cursor.execute("SELECT username FROM accounts WHERE user_id=%s", (user_id,))
     accounts = cursor.fetchall()
 
     if not accounts:
         update.message.reply_text("❌ لا يوجد حسابات")
         return
 
-    keyboard = [
-        [InlineKeyboardButton(acc[1], callback_data=f"acc_{acc[0]}")]
-        for acc in accounts
-    ]
+    text = "📂 حساباتك:\n\n"
+    for acc in accounts:
+        text += f"👤 {acc[0]}\n"
 
-    update.message.reply_text("📂 حساباتك:", reply_markup=InlineKeyboardMarkup(keyboard))
+    update.message.reply_text(text)
 
-# ---------------- الأزرار ----------------
+# ---------------- الأزرار (فارغ لأننا حذفناها) ----------------
 def button(update, context):
-    query = update.callback_query
-    user_id = query.from_user.id
-    data = query.data
-
-    query.answer()
-
-    if data.startswith("acc_"):
-        acc_id = int(data.split("_")[1])
-
-        cursor.execute("SELECT username, password, balance FROM accounts WHERE id=%s", (acc_id,))
-        acc = cursor.fetchone()
-
-        context.user_data["selected_account"] = acc_id
-
-        keyboard = [
-            [InlineKeyboardButton("❌ حذف", callback_data="delete")],
-            [InlineKeyboardButton("🔑 تغيير كلمة السر", callback_data="change_pass")]
-        ]
-
-        query.edit_message_text(
-            f"👤 {acc[0]}\n🔑 {acc[1]}\n💰 {acc[2]} ل.س",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-    elif data == "delete":
-        acc_id = context.user_data["selected_account"]
-        cursor.execute("DELETE FROM accounts WHERE id=%s", (acc_id,))
-        conn.commit()
-        query.edit_message_text("✅ تم حذف الحساب")
-
-    elif data == "change_pass":
-        context.user_data["step"] = "change_pass"
-        query.message.reply_text("✏️ اكتب كلمة السر الجديدة:")
+    pass
 
 # ---------------- الرسائل ----------------
 def handle_message(update, context):
@@ -138,15 +105,6 @@ def handle_message(update, context):
         context.user_data["step"] = None
         update.message.reply_text("✅ تم إنشاء الحساب")
 
-    elif context.user_data.get("step") == "change_pass":
-        acc_id = context.user_data["selected_account"]
-
-        cursor.execute("UPDATE accounts SET password=%s WHERE id=%s", (text, acc_id))
-        conn.commit()
-
-        context.user_data["step"] = None
-        update.message.reply_text("✅ تم تغيير كلمة السر")
-
 # ---------------- تشغيل ----------------
 def main():
     updater = Updater(TOKEN, use_context=True)
@@ -154,7 +112,6 @@ def main():
 
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(MessageHandler(Filters.text, handle_message))
-    dp.add_handler(CallbackQueryHandler(button))
 
     updater.start_polling()
     updater.idle()
