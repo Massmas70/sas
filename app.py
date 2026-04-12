@@ -9,10 +9,10 @@ TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
 
+# ---------------- DB ----------------
 conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
-# ---------------- DB ----------------
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
@@ -57,16 +57,16 @@ def main_menu():
         ["📞 الدعم"]
     ], resize_keyboard=True)
 
+def back_menu():
+    return ReplyKeyboardMarkup([["🔙 رجوع"]], resize_keyboard=True)
+
 def admin_menu():
     return ReplyKeyboardMarkup([
         ["📊 الإحصائيات", "📅 إحصائيات الشهر"],
-        ["👥 المستخدمين", "🗄️ قاعدة البيانات"],
+        ["🗄️ قاعدة البيانات"],
         ["📢 إذاعة"],
         ["🔙 رجوع"]
     ], resize_keyboard=True)
-
-def back_admin():
-    return ReplyKeyboardMarkup([["🔙 رجوع"]], resize_keyboard=True)
 
 # ---------------- START ----------------
 def start(update, context):
@@ -83,10 +83,9 @@ def start(update, context):
 def admin_panel(update, context):
     if update.effective_user.id != ADMIN_ID:
         return
-    context.user_data["admin"] = True
     update.message.reply_text("🔧 لوحة الأدمن", reply_markup=admin_menu())
 
-# ---------------- حساباتي (أزرار شفافة) ----------------
+# ---------------- الحسابات ----------------
 def show_accounts(update, context):
     user_id = update.effective_user.id
 
@@ -94,74 +93,14 @@ def show_accounts(update, context):
     accounts = cursor.fetchall()
 
     if not accounts:
-        update.message.reply_text("❌ لا يوجد حسابات")
+        update.message.reply_text("❌ لا يوجد حسابات", reply_markup=back_menu())
         return
 
-    keyboard = [
-        [InlineKeyboardButton(acc[1], callback_data=f"acc_{acc[0]}")]
-        for acc in accounts
-    ]
+    text = "📂 حساباتك:\n\n"
+    for acc in accounts:
+        text += f"- {acc[1]} (ID: {acc[0]})\n"
 
-    update.message.reply_text("📂 حساباتك:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-# ---------------- عرض مستخدمين (أدمن) ----------------
-def admin_users(update, context):
-    cursor.execute("SELECT user_id FROM users LIMIT 20")
-    users = cursor.fetchall()
-
-    keyboard = [
-        [InlineKeyboardButton(str(u[0]), callback_data=f"user_{u[0]}")]
-        for u in users
-    ]
-
-    keyboard.append([InlineKeyboardButton("🔍 بحث", callback_data="search_user")])
-
-    update.message.reply_text("👥 المستخدمين:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-# ---------------- CALLBACK ----------------
-def button(update, context):
-    query = update.callback_query
-    query.answer()
-    data = query.data
-
-    # حساب
-    if data.startswith("acc_"):
-        acc_id = int(data.split("_")[1])
-
-        cursor.execute("SELECT username, password, balance FROM accounts WHERE id=%s", (acc_id,))
-        acc = cursor.fetchone()
-
-        context.user_data["account_id"] = acc_id
-
-        keyboard = [
-            [InlineKeyboardButton("➕ تعبئة", callback_data="deposit_acc"),
-             InlineKeyboardButton("➖ سحب", callback_data="withdraw_acc")],
-            [InlineKeyboardButton("❌ حذف", callback_data="delete")],
-            [InlineKeyboardButton("🔑 تغيير كلمة السر", callback_data="change_pass")]
-        ]
-
-        query.edit_message_text(
-            f"👤 {acc[0]}\n🔑 {acc[1]}\n💰 {acc[2]}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-    # عرض مستخدم
-    elif data.startswith("user_"):
-        uid = int(data.split("_")[1])
-
-        cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (uid,))
-        wallet = cursor.fetchone()
-
-        cursor.execute("SELECT COUNT(*) FROM accounts WHERE user_id=%s", (uid,))
-        accs = cursor.fetchone()[0]
-
-        query.edit_message_text(
-            f"👤 المستخدم: {uid}\n💰 المحفظة: {wallet[0] if wallet else 0}\n📂 الحسابات: {accs}"
-        )
-
-    elif data == "search_user":
-        context.user_data["step"] = "search_user"
-        query.message.reply_text("🔍 أرسل ID المستخدم:")
+    update.message.reply_text(text, reply_markup=back_menu())
 
 # ---------------- الرسائل ----------------
 def handle_message(update, context):
@@ -171,75 +110,103 @@ def handle_message(update, context):
 
     # رجوع
     if text == "🔙 رجوع":
-        if context.user_data.get("admin"):
-            update.message.reply_text("🔧 لوحة الأدمن", reply_markup=admin_menu())
-        else:
-            update.message.reply_text("🏠 الرئيسية", reply_markup=main_menu())
+        context.user_data.clear()
+        update.message.reply_text("🏠 الرئيسية", reply_markup=main_menu())
         return
 
     # -------- ADMIN --------
     if user_id == ADMIN_ID:
 
-        if text == "👥 المستخدمين":
-            admin_users(update, context)
+        if text == "📊 الإحصائيات":
+            cursor.execute("SELECT COUNT(*) FROM users")
+            users = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM accounts")
+            accounts = cursor.fetchone()[0]
+
+            cursor.execute("SELECT SUM(amount) FROM stats WHERE type='deposit'")
+            deposit = cursor.fetchone()[0] or 0
+
+            cursor.execute("SELECT SUM(amount) FROM stats WHERE type='withdraw'")
+            withdraw = cursor.fetchone()[0] or 0
+
+            update.message.reply_text(
+                f"📊 الإحصائيات:\n\n"
+                f"👥 المستخدمين: {users}\n"
+                f"📂 الحسابات: {accounts}\n"
+                f"💰 المودع: {deposit}\n"
+                f"💸 المسحوب: {withdraw}",
+                reply_markup=admin_menu()
+            )
+            return
+
+        elif text == "📅 إحصائيات الشهر":
+            cursor.execute("""
+            SELECT SUM(amount) FROM stats
+            WHERE type='deposit'
+            AND date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)
+            """)
+            deposit = cursor.fetchone()[0] or 0
+
+            cursor.execute("""
+            SELECT SUM(amount) FROM stats
+            WHERE type='withdraw'
+            AND date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)
+            """)
+            withdraw = cursor.fetchone()[0] or 0
+
+            update.message.reply_text(
+                f"📅 الشهر:\n💰 {deposit}\n💸 {withdraw}",
+                reply_markup=admin_menu()
+            )
+            return
+
+        elif text == "🗄️ قاعدة البيانات":
+            cursor.execute("SELECT COUNT(*) FROM users")
+            users = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM history")
+            logs = cursor.fetchone()[0]
+
+            update.message.reply_text(
+                f"🗄️ DB:\n👥 {users}\n📜 {logs}",
+                reply_markup=admin_menu()
+            )
             return
 
         elif text == "📢 إذاعة":
             context.user_data["step"] = "broadcast"
-            update.message.reply_text("✉️ أرسل الرسالة:", reply_markup=back_admin())
+            update.message.reply_text("✉️ أرسل الرسالة", reply_markup=back_menu())
             return
-
-        elif text == "📊 الإحصائيات":
-            cursor.execute("SELECT COUNT(*) FROM users")
-            users = cursor.fetchone()[0]
-            update.message.reply_text(f"👥 المستخدمين: {users}", reply_markup=admin_menu())
-            return
-
-    # بحث مستخدم
-    if step == "search_user":
-        try:
-            uid = int(text)
-        except:
-            update.message.reply_text("❌ رقم غير صحيح")
-            return
-
-        cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (uid,))
-        data = cursor.fetchone()
-
-        if not data:
-            update.message.reply_text("❌ غير موجود")
-        else:
-            update.message.reply_text(f"👤 {uid}\n💰 {data[0]}")
-
-        context.user_data["step"] = None
-        return
 
     # بث
-    if step == "broadcast":
+    if step == "broadcast" and user_id == ADMIN_ID:
         cursor.execute("SELECT user_id FROM users")
-        for u in cursor.fetchall():
+        users = cursor.fetchall()
+
+        for u in users:
             try:
                 context.bot.send_message(u[0], text)
             except:
                 pass
 
-        update.message.reply_text("✅ تم", reply_markup=admin_menu())
-        context.user_data["step"] = None
+        update.message.reply_text("✅ تم الإرسال", reply_markup=admin_menu())
+        context.user_data.clear()
         return
 
-    # -------- USER --------
+    # -------- المستخدم --------
 
     if text == "📂 حساباتي":
         show_accounts(update, context)
 
     elif text == "➕ إنشاء حساب":
         context.user_data["step"] = "username"
-        update.message.reply_text("👤 username:")
+        update.message.reply_text("👤 اكتب username:", reply_markup=back_menu())
 
     elif step == "username":
         context.user_data["username"] = text
         context.user_data["step"] = "password"
-        update.message.reply_text("🔑 password:")
+        update.message.reply_text("🔑 اكتب password:")
 
     elif step == "password":
         cursor.execute(
@@ -248,8 +215,20 @@ def handle_message(update, context):
         )
         conn.commit()
 
-        update.message.reply_text("✅ تم", reply_markup=main_menu())
+        update.message.reply_text("✅ تم إنشاء الحساب", reply_markup=main_menu())
         context.user_data.clear()
+
+    elif text == "💰 محفظتي":
+        cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
+        wallet = cursor.fetchone()[0]
+
+        keyboard = ReplyKeyboardMarkup([
+            ["➕ تعبئة", "➖ سحب"],
+            ["📊 العمليات"],
+            ["🔙 رجوع"]
+        ], resize_keyboard=True)
+
+        update.message.reply_text(f"💰 رصيدك: {wallet}", reply_markup=keyboard)
 
 # ---------------- تشغيل ----------------
 def main():
@@ -258,7 +237,6 @@ def main():
 
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("admin", admin_panel))
-    dp.add_handler(CallbackQueryHandler(button))
     dp.add_handler(MessageHandler(Filters.text, handle_message))
 
     updater.start_polling()
