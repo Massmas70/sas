@@ -2,11 +2,19 @@
 
 import os
 import psycopg2
+import threading
+from flask import Flask, request, jsonify, send_file
 from telegram import *
 from telegram.ext import *
 
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# ----------- Flask Admin -----------
+app = Flask(__name__)
+
+ADMIN_PASSWORD = "123456"
+ADMIN_TOKEN = "secret-token"
 
 # ---------------- الاتصال بقاعدة البيانات ----------------
 conn = psycopg2.connect(DATABASE_URL)
@@ -39,6 +47,53 @@ CREATE TABLE IF NOT EXISTS history (
 """)
 
 conn.commit()
+
+# ---------------- Admin API ----------------
+
+@app.route("/")
+def admin_page():
+    return send_file("admin.html")
+
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.json
+    if data.get("password") == ADMIN_PASSWORD:
+        return jsonify({"success": True, "token": ADMIN_TOKEN})
+    return jsonify({"success": False}), 401
+
+@app.route("/stats", methods=["POST"])
+def stats():
+    if request.json.get("token") != ADMIN_TOKEN:
+        return "Unauthorized", 403
+
+    cursor.execute("SELECT COUNT(*) FROM users")
+    users_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM accounts")
+    accounts_count = cursor.fetchone()[0]
+
+    return jsonify({
+        "users": users_count,
+        "accounts": accounts_count
+    })
+
+@app.route("/broadcast", methods=["POST"])
+def broadcast():
+    if request.json.get("token") != ADMIN_TOKEN:
+        return "Unauthorized", 403
+
+    message = request.json.get("message")
+
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+
+    for user in users:
+        try:
+            updater.bot.send_message(user[0], message)
+        except:
+            pass
+
+    return "Sent"
 
 # ---------------- القائمة الرئيسية ----------------
 def main_menu():
@@ -85,7 +140,6 @@ def button(update, context):
 
     query.answer()
 
-    # عرض حساب
     if data.startswith("acc_"):
         acc_id = int(data.split("_")[1])
 
@@ -106,27 +160,21 @@ def button(update, context):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    # حذف
     elif data == "delete":
         acc_id = context.user_data.get("account_id")
-
         cursor.execute("DELETE FROM accounts WHERE id=%s", (acc_id,))
         conn.commit()
-
         query.edit_message_text("✅ تم حذف الحساب")
 
-    # تغيير كلمة السر
     elif data == "change_pass":
         context.user_data["step"] = "change_pass"
         query.message.reply_text("✏️ اكتب كلمة السر الجديدة:")
 
-    # بدء عملية تعبئة/سحب من الحساب
     elif data in ["deposit_acc", "withdraw_acc"]:
         context.user_data["action"] = data
         context.user_data["step"] = "amount_account"
         query.message.reply_text("💰 اكتب المبلغ:")
 
-    # المحفظة
     elif data == "deposit_wallet":
         context.user_data["step"] = "deposit_wallet"
         query.message.reply_text("💰 أدخل المبلغ:")
@@ -135,15 +183,12 @@ def button(update, context):
         context.user_data["step"] = "withdraw_wallet"
         query.message.reply_text("💰 أدخل المبلغ:")
 
-    # السجل
     elif data == "history":
         cursor.execute("SELECT action FROM history WHERE user_id=%s ORDER BY id DESC LIMIT 10", (user_id,))
         logs = cursor.fetchall()
-
         msg = "\n".join([log[0] for log in logs]) if logs else "لا يوجد عمليات"
         query.message.reply_text(msg)
 
-    # طرق الدفع
     elif data in ["syriatel", "sham"]:
         amount = context.user_data.get("amount")
         action = context.user_data.get("action")
@@ -287,13 +332,20 @@ def handle_message(update, context):
         update.message.reply_text("✅ تم تغيير كلمة السر")
 
 # ---------------- تشغيل ----------------
+def run_web():
+    app.run(host="0.0.0.0", port=3000)
+
 def main():
+    global updater
+
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(MessageHandler(Filters.text, handle_message))
     dp.add_handler(CallbackQueryHandler(button))
+
+    threading.Thread(target=run_web).start()
 
     updater.start_polling()
     updater.idle()
