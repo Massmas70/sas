@@ -44,10 +44,10 @@ conn.commit()
 def main_menu():
     return ReplyKeyboardMarkup([
         ["📂 حساباتي", "➕ إنشاء حساب"],
-        ["💳 تعبئة/سحب", "💰 محفظتي"],
+        ["💰 محفظتي"],
         ["📞 الدعم"]
     ], resize_keyboard=True)
-
+    
 # ---------------- start ----------------
 def start(update, context):
     user_id = update.effective_user.id
