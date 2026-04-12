@@ -7,6 +7,7 @@ from telegram.ext import *
 
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
 
 # ---------------- الاتصال بقاعدة البيانات ----------------
 conn = psycopg2.connect(DATABASE_URL)
@@ -59,6 +60,19 @@ def start(update, context):
 
     update.message.reply_text("👋 أهلا بك", reply_markup=main_menu())
 
+# ---------------- لوحة الأدمن ----------------
+def admin_panel(update, context):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("👥 عدد المستخدمين", callback_data="admin_users")],
+        [InlineKeyboardButton("💰 مجموع الأموال", callback_data="admin_money")],
+        [InlineKeyboardButton("📢 إذاعة", callback_data="admin_broadcast")]
+    ]
+
+    update.message.reply_text("🔧 لوحة الأدمن", reply_markup=InlineKeyboardMarkup(keyboard))
+
 # ---------------- عرض الحسابات ----------------
 def show_accounts(update, context):
     user_id = update.effective_user.id
@@ -85,6 +99,26 @@ def button(update, context):
 
     query.answer()
 
+    # -------- ADMIN --------
+    if user_id == ADMIN_ID:
+
+        if data == "admin_users":
+            cursor.execute("SELECT COUNT(*) FROM users")
+            count = cursor.fetchone()[0]
+            query.message.reply_text(f"👥 عدد المستخدمين: {count}")
+            return
+
+        elif data == "admin_money":
+            cursor.execute("SELECT SUM(wallet) FROM users")
+            total = cursor.fetchone()[0] or 0
+            query.message.reply_text(f"💰 مجموع الأموال: {total}")
+            return
+
+        elif data == "admin_broadcast":
+            context.user_data["step"] = "admin_broadcast"
+            query.message.reply_text("✉️ أرسل الرسالة الآن:")
+            return
+
     # عرض حساب
     if data.startswith("acc_"):
         acc_id = int(data.split("_")[1])
@@ -106,7 +140,6 @@ def button(update, context):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    # حذف
     elif data == "delete":
         acc_id = context.user_data.get("account_id")
 
@@ -115,18 +148,15 @@ def button(update, context):
 
         query.edit_message_text("✅ تم حذف الحساب")
 
-    # تغيير كلمة السر
     elif data == "change_pass":
         context.user_data["step"] = "change_pass"
         query.message.reply_text("✏️ اكتب كلمة السر الجديدة:")
 
-    # بدء عملية تعبئة/سحب من الحساب
     elif data in ["deposit_acc", "withdraw_acc"]:
         context.user_data["action"] = data
         context.user_data["step"] = "amount_account"
         query.message.reply_text("💰 اكتب المبلغ:")
 
-    # المحفظة
     elif data == "deposit_wallet":
         context.user_data["step"] = "deposit_wallet"
         query.message.reply_text("💰 أدخل المبلغ:")
@@ -135,7 +165,6 @@ def button(update, context):
         context.user_data["step"] = "withdraw_wallet"
         query.message.reply_text("💰 أدخل المبلغ:")
 
-    # السجل
     elif data == "history":
         cursor.execute("SELECT action FROM history WHERE user_id=%s ORDER BY id DESC LIMIT 10", (user_id,))
         logs = cursor.fetchall()
@@ -143,7 +172,6 @@ def button(update, context):
         msg = "\n".join([log[0] for log in logs]) if logs else "لا يوجد عمليات"
         query.message.reply_text(msg)
 
-    # طرق الدفع
     elif data in ["syriatel", "sham"]:
         amount = context.user_data.get("amount")
         action = context.user_data.get("action")
@@ -174,6 +202,21 @@ def handle_message(update, context):
     user_id = update.effective_user.id
     text = update.message.text
     step = context.user_data.get("step")
+
+    # -------- بث --------
+    if step == "admin_broadcast" and user_id == ADMIN_ID:
+        cursor.execute("SELECT user_id FROM users")
+        users = cursor.fetchall()
+
+        for u in users:
+            try:
+                context.bot.send_message(chat_id=u[0], text=text)
+            except:
+                pass
+
+        context.user_data["step"] = None
+        update.message.reply_text("✅ تم إرسال الرسالة للجميع")
+        return
 
     if text == "💰 محفظتي":
         cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
@@ -242,7 +285,7 @@ def handle_message(update, context):
 
         elif action == "withdraw_acc":
             if balance >= amount:
-                cursor.execute("UPDATE accounts SET balance=balance-%s WHERE id=%s", (amount, acc_id))
+                cursor.execute("UPDATE accounts SET balance=balance-%s WHERE id=%s", (acc_id,))
                 cursor.execute("UPDATE users SET wallet=wallet+%s WHERE user_id=%s", (amount, user_id))
                 cursor.execute("INSERT INTO history (user_id, action) VALUES (%s, %s)",
                                (user_id, f"➖ {amount} إلى المحفظة"))
@@ -292,6 +335,7 @@ def main():
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("admin", admin_panel))
     dp.add_handler(MessageHandler(Filters.text, handle_message))
     dp.add_handler(CallbackQueryHandler(button))
 
