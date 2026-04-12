@@ -1,12 +1,44 @@
 # -*- coding: utf-8 -*-
 
 import os
+import psycopg2
 from telegram import *
 from telegram.ext import *
 
 TOKEN = os.getenv("TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-users = {}
+# ---------------- الاتصال بقاعدة البيانات ----------------
+conn = psycopg2.connect(DATABASE_URL)
+cursor = conn.cursor()
+
+# ---------------- إنشاء الجداول ----------------
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id BIGINT PRIMARY KEY,
+    wallet INTEGER DEFAULT 0
+);
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS accounts (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT,
+    username TEXT,
+    password TEXT,
+    balance INTEGER DEFAULT 0
+);
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS history (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT,
+    action TEXT
+);
+""")
+
+conn.commit()
 
 # ---------------- القائمة الرئيسية ----------------
 def main_menu():
@@ -20,30 +52,27 @@ def main_menu():
 def start(update, context):
     user_id = update.effective_user.id
 
-    if user_id not in users:
-        users[user_id] = {
-            "wallet": 0,
-            "accounts": [],
-            "step": None,
-            "selected_account": None,
-            "history": [],
-            "amount": 0,
-            "action": None
-        }
+    cursor.execute("SELECT * FROM users WHERE user_id=%s", (user_id,))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO users (user_id) VALUES (%s)", (user_id,))
+        conn.commit()
 
     update.message.reply_text("👋 أهلا بك", reply_markup=main_menu())
 
 # ---------------- عرض الحسابات ----------------
 def show_accounts(update, context):
-    user = users[update.effective_user.id]
+    user_id = update.effective_user.id
 
-    if not user["accounts"]:
+    cursor.execute("SELECT id, username FROM accounts WHERE user_id=%s", (user_id,))
+    accounts = cursor.fetchall()
+
+    if not accounts:
         update.message.reply_text("❌ لا يوجد حسابات")
         return
 
     keyboard = [
-        [InlineKeyboardButton(acc["username"], callback_data=f"acc_{i}")]
-        for i, acc in enumerate(user["accounts"])
+        [InlineKeyboardButton(acc[1], callback_data=f"acc_{acc[0]}")]
+        for acc in accounts
     ]
 
     update.message.reply_text("📂 حساباتك:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -52,15 +81,18 @@ def show_accounts(update, context):
 def button(update, context):
     query = update.callback_query
     user_id = query.from_user.id
-    user = users[user_id]
     data = query.data
 
     query.answer()
 
+    # عرض حساب
     if data.startswith("acc_"):
-        i = int(data.split("_")[1])
-        acc = user["accounts"][i]
-        user["selected_account"] = i
+        acc_id = int(data.split("_")[1])
+
+        cursor.execute("SELECT username, password, balance FROM accounts WHERE id=%s", (acc_id,))
+        acc = cursor.fetchone()
+
+        context.user_data["account_id"] = acc_id
 
         keyboard = [
             [InlineKeyboardButton("❌ حذف", callback_data="delete")],
@@ -68,139 +100,176 @@ def button(update, context):
         ]
 
         query.edit_message_text(
-            f"👤 {acc['username']}\n🔑 {acc['password']}\n💰 {acc['balance']} ل.س",
+            f"👤 {acc[0]}\n🔑 {acc[1]}\n💰 {acc[2]} ل.س",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+    # حذف
     elif data == "delete":
-        i = user["selected_account"]
-        user["accounts"].pop(i)
+        acc_id = context.user_data.get("account_id")
+
+        cursor.execute("DELETE FROM accounts WHERE id=%s", (acc_id,))
+        conn.commit()
+
         query.edit_message_text("✅ تم حذف الحساب")
 
+    # تغيير كلمة السر
     elif data == "change_pass":
-        user["step"] = "change_pass"
+        context.user_data["step"] = "change_pass"
         query.message.reply_text("✏️ اكتب كلمة السر الجديدة:")
 
+    # اختيار حساب للتحويل
     elif data.startswith("select_"):
-        i = int(data.split("_")[1])
-        user["selected_account"] = i
-        user["step"] = "amount_account"
+        acc_id = int(data.split("_")[1])
+        context.user_data["account_id"] = acc_id
+        context.user_data["step"] = "amount_account"
+
         query.message.reply_text("💰 اكتب المبلغ:")
 
+    # تعبئة/سحب من الحساب
     elif data in ["deposit_acc", "withdraw_acc"]:
-        i = user["selected_account"]
-        amount = user["amount"]
+        acc_id = context.user_data.get("account_id")
+        amount = context.user_data.get("amount")
+
+        # جلب الرصيد
+        cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
+        wallet = cursor.fetchone()[0]
+
+        cursor.execute("SELECT balance FROM accounts WHERE id=%s", (acc_id,))
+        balance = cursor.fetchone()[0]
 
         if data == "deposit_acc":
-            if user["wallet"] >= amount:
-                user["wallet"] -= amount
-                user["accounts"][i]["balance"] += amount
-                user["history"].append(f"➕ {amount} ل.س إلى الحساب")
+            if wallet >= amount:
+                cursor.execute("UPDATE users SET wallet=wallet-%s WHERE user_id=%s", (amount, user_id))
+                cursor.execute("UPDATE accounts SET balance=balance+%s WHERE id=%s", (amount, acc_id))
+                cursor.execute("INSERT INTO history (user_id, action) VALUES (%s, %s)",
+                               (user_id, f"➕ {amount} إلى الحساب"))
+                conn.commit()
                 query.message.reply_text("✅ تم التعبئة")
             else:
                 query.message.reply_text("❌ الرصيد غير كافي")
 
         elif data == "withdraw_acc":
-            if user["accounts"][i]["balance"] >= amount:
-                user["accounts"][i]["balance"] -= amount
-                user["wallet"] += amount
-                user["history"].append(f"➖ {amount} ل.س إلى المحفظة")
+            if balance >= amount:
+                cursor.execute("UPDATE accounts SET balance=balance-%s WHERE id=%s", (amount, acc_id))
+                cursor.execute("UPDATE users SET wallet=wallet+%s WHERE user_id=%s", (amount, user_id))
+                cursor.execute("INSERT INTO history (user_id, action) VALUES (%s, %s)",
+                               (user_id, f"➖ {amount} إلى المحفظة"))
+                conn.commit()
                 query.message.reply_text("✅ تم السحب")
             else:
                 query.message.reply_text("❌ رصيد الحساب غير كافي")
 
+    # المحفظة
     elif data == "deposit_wallet":
-        user["step"] = "deposit_wallet"
+        context.user_data["step"] = "deposit_wallet"
         query.message.reply_text("💰 أدخل المبلغ:")
 
     elif data == "withdraw_wallet":
-        user["step"] = "withdraw_wallet"
+        context.user_data["step"] = "withdraw_wallet"
         query.message.reply_text("💰 أدخل المبلغ:")
 
+    # السجل
     elif data == "history":
-        logs = user["history"]
-        msg = "\n".join(logs[-10:]) if logs else "لا يوجد عمليات"
+        cursor.execute("SELECT action FROM history WHERE user_id=%s ORDER BY id DESC LIMIT 10", (user_id,))
+        logs = cursor.fetchall()
+
+        msg = "\n".join([log[0] for log in logs]) if logs else "لا يوجد عمليات"
         query.message.reply_text(msg)
 
+    # طرق الدفع
     elif data in ["syriatel", "sham"]:
-        amount = user["amount"]
-        method = "سيريتيل" if data == "syriatel" else "شام"
+        amount = context.user_data.get("amount")
+        action = context.user_data.get("action")
 
-        if user["action"] == "deposit_wallet":
-            user["wallet"] += amount
-            user["history"].append(f"➕ {amount} ل.س عبر {method}")
-            query.message.reply_text("✅ تم شحن المحفظة")
+        cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
+        wallet = cursor.fetchone()[0]
 
-        elif user["action"] == "withdraw_wallet":
-            if user["wallet"] < amount:
+        if action == "deposit_wallet":
+            cursor.execute("UPDATE users SET wallet=wallet+%s WHERE user_id=%s", (amount, user_id))
+            cursor.execute("INSERT INTO history (user_id, action) VALUES (%s, %s)",
+                           (user_id, f"➕ {amount} شحن"))
+            conn.commit()
+            query.message.reply_text("✅ تم الشحن")
+
+        elif action == "withdraw_wallet":
+            if wallet < amount:
                 query.message.reply_text("❌ الرصيد غير كافي")
                 return
 
-            user["wallet"] -= amount
-            user["history"].append(f"➖ {amount} ل.س عبر {method}")
+            cursor.execute("UPDATE users SET wallet=wallet-%s WHERE user_id=%s", (amount, user_id))
+            cursor.execute("INSERT INTO history (user_id, action) VALUES (%s, %s)",
+                           (user_id, f"➖ {amount} سحب"))
+            conn.commit()
             query.message.reply_text("✅ تم السحب")
 
 # ---------------- الرسائل ----------------
 def handle_message(update, context):
-    user = users[update.effective_user.id]
+    user_id = update.effective_user.id
     text = update.message.text
+    step = context.user_data.get("step")
 
     if text == "💰 محفظتي":
+        cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
+        wallet = cursor.fetchone()[0]
+
         keyboard = [
             [InlineKeyboardButton("➕ تعبئة المحفظة", callback_data="deposit_wallet")],
             [InlineKeyboardButton("➖ سحب من المحفظة", callback_data="withdraw_wallet")],
             [InlineKeyboardButton("📊 العمليات", callback_data="history")]
         ]
 
-        update.message.reply_text(
-            f"💰 رصيدك: {user['wallet']} ل.س",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        update.message.reply_text(f"💰 رصيدك: {wallet} ل.س",
+                                  reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif text == "📂 حساباتي":
         show_accounts(update, context)
 
     elif text == "➕ إنشاء حساب":
-        user["step"] = "username"
+        context.user_data["step"] = "username"
         update.message.reply_text("👤 اكتب username:")
 
-    elif user["step"] == "username":
-        context.user_data["new_user"] = text
-        user["step"] = "password"
+    elif step == "username":
+        context.user_data["username"] = text
+        context.user_data["step"] = "password"
         update.message.reply_text("🔑 اكتب password:")
 
-    elif user["step"] == "password":
-        user["accounts"].append({
-            "username": context.user_data["new_user"],
-            "password": text,
-            "balance": 0
-        })
+    elif step == "password":
+        username = context.user_data.get("username")
 
-        user["step"] = None
+        cursor.execute("""
+        INSERT INTO accounts (user_id, username, password)
+        VALUES (%s, %s, %s)
+        """, (user_id, username, text))
+
+        conn.commit()
+
+        context.user_data["step"] = None
         update.message.reply_text("✅ تم إنشاء الحساب")
 
     elif text == "💳 تعبئة/سحب":
-        accounts = user["accounts"]
+        cursor.execute("SELECT id, username FROM accounts WHERE user_id=%s", (user_id,))
+        accounts = cursor.fetchall()
 
         if not accounts:
             update.message.reply_text("❌ لا يوجد حسابات")
             return
 
         keyboard = [
-            [InlineKeyboardButton(acc["username"], callback_data=f"select_{i}")]
-            for i, acc in enumerate(accounts)
+            [InlineKeyboardButton(acc[1], callback_data=f"select_{acc[0]}")]
+            for acc in accounts
         ]
 
         update.message.reply_text("اختر الحساب:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif user["step"] == "amount_account":
+    elif step == "amount_account":
         try:
-            user["amount"] = int(text)
+            context.user_data["amount"] = int(text)
         except:
             update.message.reply_text("❌ أدخل رقم صحيح")
             return
 
-        user["step"] = None
+        context.user_data["step"] = None
 
         keyboard = [
             [InlineKeyboardButton("➕ تعبئة", callback_data="deposit_acc")],
@@ -209,10 +278,10 @@ def handle_message(update, context):
 
         update.message.reply_text("اختر العملية:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif user["step"] == "deposit_wallet":
-        user["amount"] = int(text)
-        user["action"] = "deposit_wallet"
-        user["step"] = None
+    elif step == "deposit_wallet":
+        context.user_data["amount"] = int(text)
+        context.user_data["action"] = "deposit_wallet"
+        context.user_data["step"] = None
 
         keyboard = [
             [InlineKeyboardButton("📱 سيريتيل", callback_data="syriatel")],
@@ -221,10 +290,10 @@ def handle_message(update, context):
 
         update.message.reply_text("اختر:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif user["step"] == "withdraw_wallet":
-        user["amount"] = int(text)
-        user["action"] = "withdraw_wallet"
-        user["step"] = None
+    elif step == "withdraw_wallet":
+        context.user_data["amount"] = int(text)
+        context.user_data["action"] = "withdraw_wallet"
+        context.user_data["step"] = None
 
         keyboard = [
             [InlineKeyboardButton("📱 سيريتيل", callback_data="syriatel")],
@@ -233,10 +302,13 @@ def handle_message(update, context):
 
         update.message.reply_text("اختر:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif user["step"] == "change_pass":
-        i = user["selected_account"]
-        user["accounts"][i]["password"] = text
-        user["step"] = None
+    elif step == "change_pass":
+        acc_id = context.user_data.get("account_id")
+
+        cursor.execute("UPDATE accounts SET password=%s WHERE id=%s", (text, acc_id))
+        conn.commit()
+
+        context.user_data["step"] = None
         update.message.reply_text("✅ تم تغيير كلمة السر")
 
 # ---------------- تشغيل ----------------
