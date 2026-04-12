@@ -39,6 +39,16 @@ CREATE TABLE IF NOT EXISTS history (
 );
 """)
 
+# جدول الإحصائيات
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS stats (
+    id SERIAL PRIMARY KEY,
+    type TEXT,
+    amount INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+""")
+
 conn.commit()
 
 # ---------------- القائمة الرئيسية ----------------
@@ -66,8 +76,9 @@ def admin_panel(update, context):
         return
 
     keyboard = [
-        [InlineKeyboardButton("👥 عدد المستخدمين", callback_data="admin_users")],
-        [InlineKeyboardButton("💰 مجموع الأموال", callback_data="admin_money")],
+        [InlineKeyboardButton("📊 الإحصائيات", callback_data="admin_stats")],
+        [InlineKeyboardButton("📅 إحصائيات الشهر", callback_data="admin_month")],
+        [InlineKeyboardButton("🗄️ قاعدة البيانات", callback_data="admin_db")],
         [InlineKeyboardButton("📢 إذاعة", callback_data="admin_broadcast")]
     ]
 
@@ -102,16 +113,66 @@ def button(update, context):
     # -------- ADMIN --------
     if user_id == ADMIN_ID:
 
-        if data == "admin_users":
+        if data == "admin_stats":
             cursor.execute("SELECT COUNT(*) FROM users")
-            count = cursor.fetchone()[0]
-            query.message.reply_text(f"👥 عدد المستخدمين: {count}")
+            users = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM accounts")
+            accounts = cursor.fetchone()[0]
+
+            cursor.execute("SELECT SUM(amount) FROM stats WHERE type='deposit'")
+            deposit = cursor.fetchone()[0] or 0
+
+            cursor.execute("SELECT SUM(amount) FROM stats WHERE type='withdraw'")
+            withdraw = cursor.fetchone()[0] or 0
+
+            query.message.reply_text(
+                f"📊 الإحصائيات:\n\n"
+                f"👥 المستخدمين: {users}\n"
+                f"📂 الحسابات: {accounts}\n"
+                f"💰 المودع: {deposit}\n"
+                f"💸 المسحوب: {withdraw}"
+            )
             return
 
-        elif data == "admin_money":
-            cursor.execute("SELECT SUM(wallet) FROM users")
-            total = cursor.fetchone()[0] or 0
-            query.message.reply_text(f"💰 مجموع الأموال: {total}")
+        elif data == "admin_month":
+            cursor.execute("""
+            SELECT SUM(amount) FROM stats
+            WHERE type='deposit'
+            AND date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)
+            """)
+            deposit = cursor.fetchone()[0] or 0
+
+            cursor.execute("""
+            SELECT SUM(amount) FROM stats
+            WHERE type='withdraw'
+            AND date_trunc('month', created_at) = date_trunc('month', CURRENT_DATE)
+            """)
+            withdraw = cursor.fetchone()[0] or 0
+
+            query.message.reply_text(
+                f"📅 إحصائيات الشهر:\n\n"
+                f"💰 المودع: {deposit}\n"
+                f"💸 المسحوب: {withdraw}"
+            )
+            return
+
+        elif data == "admin_db":
+            cursor.execute("SELECT COUNT(*) FROM users")
+            users = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM accounts")
+            accounts = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM history")
+            logs = cursor.fetchone()[0]
+
+            query.message.reply_text(
+                f"🗄️ قاعدة البيانات:\n\n"
+                f"👥 المستخدمين: {users}\n"
+                f"📂 الحسابات: {accounts}\n"
+                f"📜 العمليات: {logs}"
+            )
             return
 
         elif data == "admin_broadcast":
@@ -119,7 +180,8 @@ def button(update, context):
             query.message.reply_text("✉️ أرسل الرسالة الآن:")
             return
 
-    # عرض حساب
+    # -------- باقي كودك بدون تغيير --------
+
     if data.startswith("acc_"):
         acc_id = int(data.split("_")[1])
 
@@ -142,10 +204,8 @@ def button(update, context):
 
     elif data == "delete":
         acc_id = context.user_data.get("account_id")
-
         cursor.execute("DELETE FROM accounts WHERE id=%s", (acc_id,))
         conn.commit()
-
         query.edit_message_text("✅ تم حذف الحساب")
 
     elif data == "change_pass":
@@ -168,7 +228,6 @@ def button(update, context):
     elif data == "history":
         cursor.execute("SELECT action FROM history WHERE user_id=%s ORDER BY id DESC LIMIT 10", (user_id,))
         logs = cursor.fetchall()
-
         msg = "\n".join([log[0] for log in logs]) if logs else "لا يوجد عمليات"
         query.message.reply_text(msg)
 
@@ -183,6 +242,7 @@ def button(update, context):
             cursor.execute("UPDATE users SET wallet=wallet+%s WHERE user_id=%s", (amount, user_id))
             cursor.execute("INSERT INTO history (user_id, action) VALUES (%s, %s)",
                            (user_id, f"➕ {amount} شحن"))
+            cursor.execute("INSERT INTO stats (type, amount) VALUES (%s, %s)", ("deposit", amount))
             conn.commit()
             query.message.reply_text("✅ تم الشحن")
 
@@ -194,6 +254,7 @@ def button(update, context):
             cursor.execute("UPDATE users SET wallet=wallet-%s WHERE user_id=%s", (amount, user_id))
             cursor.execute("INSERT INTO history (user_id, action) VALUES (%s, %s)",
                            (user_id, f"➖ {amount} سحب"))
+            cursor.execute("INSERT INTO stats (type, amount) VALUES (%s, %s)", ("withdraw", amount))
             conn.commit()
             query.message.reply_text("✅ تم السحب")
 
@@ -203,7 +264,7 @@ def handle_message(update, context):
     text = update.message.text
     step = context.user_data.get("step")
 
-    # -------- بث --------
+    # بث
     if step == "admin_broadcast" and user_id == ADMIN_ID:
         cursor.execute("SELECT user_id FROM users")
         users = cursor.fetchall()
