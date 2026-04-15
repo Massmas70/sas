@@ -9,10 +9,11 @@ TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
 
-# ---------------- DB ----------------
+# ---------------- الاتصال بقاعدة البيانات ----------------
 conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
+# ---------------- إنشاء الجداول ----------------
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
@@ -61,7 +62,7 @@ def pop_page(context):
         return context.user_data["nav_stack"][-1]
     return "main"
 
-# ---------------- MAIN MENU ----------------
+# ---------------- القائمة الرئيسية ----------------
 def main_menu():
     return ReplyKeyboardMarkup([
         ["📂 حساباتي", "➕ إنشاء حساب"],
@@ -70,36 +71,7 @@ def main_menu():
         ["🔙 رجوع"]
     ], resize_keyboard=True)
 
-# ---------------- SHOW PAGES ----------------
-def show_page(update, context, page):
-    user_id = update.effective_user.id
-
-    if page == "main":
-        update.effective_message.reply_text("🏠 القائمة الرئيسية", reply_markup=main_menu())
-
-    elif page == "accounts":
-        show_accounts(update, context)
-
-    elif page == "wallet":
-        cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
-        wallet = cursor.fetchone()[0]
-
-        keyboard = [
-            [InlineKeyboardButton("➕ تعبئة المحفظة", callback_data="deposit_wallet")],
-            [InlineKeyboardButton("➖ سحب من المحفظة", callback_data="withdraw_wallet")],
-            [InlineKeyboardButton("📊 العمليات", callback_data="history")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="back")]
-        ]
-
-        update.effective_message.reply_text(
-            f"💰 رصيدك: {wallet} ل.س",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-    elif page == "admin":
-        admin_panel(update, context)
-
-# ---------------- START ----------------
+# ---------------- start ----------------
 def start(update, context):
     user_id = update.effective_user.id
 
@@ -112,7 +84,7 @@ def start(update, context):
 
     update.message.reply_text("👋 أهلا بك", reply_markup=main_menu())
 
-# ---------------- ADMIN ----------------
+# ---------------- لوحة الأدمن ----------------
 def admin_panel(update, context):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -129,7 +101,7 @@ def admin_panel(update, context):
 
     update.message.reply_text("🔧 لوحة الأدمن", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------------- ACCOUNTS ----------------
+# ---------------- عرض الحسابات ----------------
 def show_accounts(update, context):
     user_id = update.effective_user.id
 
@@ -149,7 +121,7 @@ def show_accounts(update, context):
 
     update.message.reply_text("📂 حساباتك:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------------- BUTTON ----------------
+# ---------------- الأزرار ----------------
 def button(update, context):
     query = update.callback_query
     user_id = query.from_user.id
@@ -157,10 +129,35 @@ def button(update, context):
 
     query.answer()
 
-    # -------- BACK --------
+    # -------- رجوع ذكي --------
     if data == "back":
         prev = pop_page(context)
-        show_page(update, context, prev)
+
+        if prev == "main":
+            query.message.reply_text("🏠 القائمة الرئيسية", reply_markup=main_menu())
+
+        elif prev == "accounts":
+            show_accounts(update, context)
+
+        elif prev == "wallet":
+            cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
+            wallet = cursor.fetchone()[0]
+
+            keyboard = [
+                [InlineKeyboardButton("➕ تعبئة المحفظة", callback_data="deposit_wallet")],
+                [InlineKeyboardButton("➖ سحب من المحفظة", callback_data="withdraw_wallet")],
+                [InlineKeyboardButton("📊 العمليات", callback_data="history")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="back")]
+            ]
+
+            query.message.reply_text(
+                f"💰 رصيدك: {wallet} ل.س",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+        elif prev == "admin":
+            admin_panel(update, context)
+
         return
 
     # -------- ADMIN --------
@@ -180,7 +177,11 @@ def button(update, context):
             withdraw = cursor.fetchone()[0] or 0
 
             query.message.reply_text(
-                f"📊 الإحصائيات:\n\n👥 المستخدمين: {users}\n📂 الحسابات: {accounts}\n💰 المودع: {deposit}\n💸 المسحوب: {withdraw}"
+                f"📊 الإحصائيات:\n\n"
+                f"👥 المستخدمين: {users}\n"
+                f"📂 الحسابات: {accounts}\n"
+                f"💰 المودع: {deposit}\n"
+                f"💸 المسحوب: {withdraw}"
             )
             return
 
@@ -200,7 +201,9 @@ def button(update, context):
             withdraw = cursor.fetchone()[0] or 0
 
             query.message.reply_text(
-                f"📅 إحصائيات الشهر:\n\n💰 المودع: {deposit}\n💸 المسحوب: {withdraw}"
+                f"📅 إحصائيات الشهر:\n\n"
+                f"💰 المودع: {deposit}\n"
+                f"💸 المسحوب: {withdraw}"
             )
             return
 
@@ -215,7 +218,10 @@ def button(update, context):
             logs = cursor.fetchone()[0]
 
             query.message.reply_text(
-                f"🗄️ قاعدة البيانات:\n\n👥 المستخدمين: {users}\n📂 الحسابات: {accounts}\n📜 العمليات: {logs}"
+                f"🗄️ قاعدة البيانات:\n\n"
+                f"👥 المستخدمين: {users}\n"
+                f"📂 الحسابات: {accounts}\n"
+                f"📜 العمليات: {logs}"
             )
             return
 
@@ -224,10 +230,9 @@ def button(update, context):
             query.message.reply_text("✉️ أرسل الرسالة الآن:")
             return
 
-    # -------- ACC DETAILS --------
+    # -------- الحساب --------
     if data.startswith("acc_"):
         acc_id = int(data.split("_")[1])
-
         context.user_data["account_id"] = acc_id
         push_page(context, "accounts")
 
@@ -247,17 +252,7 @@ def button(update, context):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    elif data == "delete":
-        acc_id = context.user_data.get("account_id")
-        cursor.execute("DELETE FROM accounts WHERE id=%s", (acc_id,))
-        conn.commit()
-        query.edit_message_text("✅ تم حذف الحساب")
-
-    elif data == "change_pass":
-        context.user_data["step"] = "change_pass"
-        query.message.reply_text("✏️ اكتب كلمة السر الجديدة:")
-
-# ---------------- MESSAGES ----------------
+# ---------------- الرسائل ----------------
 def handle_message(update, context):
     user_id = update.effective_user.id
     text = update.message.text
@@ -265,12 +260,32 @@ def handle_message(update, context):
 
     if text == "🔙 رجوع":
         prev = pop_page(context)
-        show_page(update, context, prev)
+
+        if prev == "main":
+            update.message.reply_text("🏠 القائمة الرئيسية", reply_markup=main_menu())
+
+        elif prev == "accounts":
+            show_accounts(update, context)
+
+        elif prev == "wallet":
+            cursor.execute("SELECT wallet FROM users WHERE user_id=%s", (user_id,))
+            wallet = cursor.fetchone()[0]
+
+            keyboard = [
+                [InlineKeyboardButton("➕ تعبئة المحفظة", callback_data="deposit_wallet")],
+                [InlineKeyboardButton("➖ سحب من المحفظة", callback_data="withdraw_wallet")],
+                [InlineKeyboardButton("📊 العمليات", callback_data="history")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="back")]
+            ]
+
+            update.message.reply_text(
+                f"💰 رصيدك: {wallet} ل.س",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         return
 
     if text == "💰 محفظتي":
         push_page(context, "wallet")
-        show_page(update, context, "wallet")
 
     elif text == "📂 حساباتي":
         push_page(context, "accounts")
@@ -298,7 +313,7 @@ def handle_message(update, context):
         context.user_data["step"] = None
         update.message.reply_text("✅ تم إنشاء الحساب")
 
-# ---------------- RUN ----------------
+# ---------------- تشغيل ----------------
 def main():
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
